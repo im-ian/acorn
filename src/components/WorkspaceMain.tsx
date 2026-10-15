@@ -139,6 +139,7 @@ import { FileViewer } from "./FileViewer";
 import { LayoutRenderer } from "./LayoutRenderer";
 import { PullRequestDetailModal } from "./PullRequestDetailModal";
 import { ResizeHandle } from "./ResizeHandle";
+import { ScheduleRunsView } from "./ScheduleRunsView";
 import { Tooltip } from "./Tooltip";
 import { WorkspaceCanvas } from "./WorkspaceCanvas";
 import { WorkSummaryView } from "./WorkSummaryView";
@@ -391,7 +392,9 @@ function WorkspaceTabPreviewOverlay() {
       data-testid={
         tab.kind === "code"
           ? "kanban-file-preview-overlay"
-          : "workspace-work-summary-overlay"
+          : tab.kind === "schedule"
+            ? "workspace-schedule-overlay"
+            : "workspace-work-summary-overlay"
       }
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) closeWorkspaceTab(tab.id);
@@ -432,6 +435,8 @@ function WorkspaceTabPreviewOverlay() {
               }
               isActive
             />
+          ) : tab.kind === "schedule" ? (
+            <ScheduleRunsView key={tab.id} tab={tab} />
           ) : (
             <WorkSummaryView
               key={tab.id}

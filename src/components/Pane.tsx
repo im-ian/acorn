@@ -3,6 +3,7 @@ import {
   BarChart3,
   Bell,
   BellOff,
+  CalendarClock,
   CircleX,
   Columns2,
   Copy,
@@ -50,6 +51,7 @@ import { FileViewer } from "./FileViewer";
 import { mediaKindFromPath } from "../lib/mediaFiles";
 import { copyTextWithFeedback } from "../lib/clipboardActions";
 import { ChatPane } from "./ChatPane";
+import { ScheduleRunsView } from "./ScheduleRunsView";
 import { WorkSummaryView } from "./WorkSummaryView";
 import { api } from "../lib/api";
 import {
@@ -138,6 +140,7 @@ import type {
 import {
   makeSessionWorkspaceTab,
   type CodeWorkspaceTab,
+  type ScheduleWorkspaceTab,
   type SessionWorkspaceTab,
   type WorkSummaryWorkspaceTab,
 } from "../lib/workspaceTabs";
@@ -318,7 +321,8 @@ interface PaneProps {
 type PaneTab =
   | (SessionWorkspaceTab & { session: Session })
   | CodeWorkspaceTab
-  | WorkSummaryWorkspaceTab;
+  | WorkSummaryWorkspaceTab
+  | ScheduleWorkspaceTab;
 
 /**
  * A single workspace pane. Hosts a tab strip and a body with the active
@@ -412,6 +416,15 @@ export function Pane({ paneId }: PaneProps) {
           cwdPath: workspaceTab.cwdPath,
           sessionId: workspaceTab.sessionId,
           tokenBaseline: workspaceTab.tokenBaseline,
+        });
+      } else if (workspaceTab?.kind === "schedule") {
+        ordered.push({
+          kind: "schedule",
+          id: workspaceTab.id,
+          title: workspaceTab.title,
+          repoPath: workspaceTab.repoPath,
+          lifecycle: workspaceTab.lifecycle,
+          scheduleId: workspaceTab.scheduleId,
         });
       }
     }
@@ -786,6 +799,9 @@ export function Pane({ paneId }: PaneProps) {
             }
             isActive={isFocused}
           />
+        ) : null}
+        {active?.kind === "schedule" && workspaceViewMode === "panes" ? (
+          <ScheduleRunsView key={active.id} tab={active} />
         ) : null}
         {active?.kind === "work-summary" && workspaceViewMode === "panes" ? (
           <WorkSummaryView
@@ -1245,6 +1261,14 @@ function TabGlyph({
       />
     );
   }
+  if (tab.kind === "schedule") {
+    return (
+      <CalendarClock
+        size={iconSize}
+        className="pointer-events-none shrink-0 text-accent"
+      />
+    );
+  }
   if (session?.graph) {
     return (
       <Waypoints
@@ -1368,7 +1392,9 @@ function TabItem({
       ? tab.session.worktree_path
       : tab.kind === "code"
         ? tab.path
-        : tab.cwdPath;
+        : tab.kind === "work-summary"
+          ? tab.cwdPath
+          : tab.repoPath;
   const liveInWorktree = useAppStore((s) =>
     session ? s.liveInWorktree[session.id] : false,
   );
@@ -1902,6 +1928,17 @@ function TabItem({
             <SessionTitleGeneratingIndicator
               label={paneT(t, "pane.aria.generatingSessionTitle")}
             />
+          ) : tab.kind === "schedule" ? (
+            <Tooltip label={paneT(t, "pane.aria.schedule")} side="bottom">
+              <TabGlyph
+                tab={tab}
+                session={session}
+                agentProvider={agentProvider}
+                isGeneratingTitle={false}
+                generatingLabel={paneT(t, "pane.aria.generatingSessionTitle")}
+                compact={false}
+              />
+            </Tooltip>
           ) : tab.kind === "work-summary" ? (
             <Tooltip label={paneT(t, "pane.aria.workSummary")} side="bottom">
               <TabGlyph

@@ -53,6 +53,7 @@ import {
   isWorkspaceTabId,
   makeCodeWorkspaceTab,
   makeCodeWorkspaceTabTarget,
+  makeScheduleWorkspaceTab,
   makeWorkSummaryWorkspaceTab,
   mergeCodeWorkspaceTabViewState,
   type FrontendWorkspaceTab,
@@ -265,6 +266,9 @@ function normalizeSessionNotificationKind(
 function statusForNotificationKind(
   kind: SessionNotificationKind,
 ): SessionStatus {
+  // `schedule_done` is about a run, not a session state; a finished run leaves
+  // nothing working, so it reads back as `ready`.
+  if (kind === "schedule_done") return "ready";
   return kind;
 }
 
@@ -481,6 +485,14 @@ interface AppStateModel {
   pendingTerminalInput: Record<string, PendingTerminalInput>;
   sessionNotifications: SessionNotification[];
   silencedSessionIds: Record<string, true>;
+  /**
+   * Sessions deliberately kept out of the workspace. `reconcileWorkspace`
+   * assigns every other session a tab, so a background schedule run would
+   * otherwise steal the focused pane every time it fires. Their PTY lives in
+   * the `acornd` daemon, which is why no mounted Terminal is needed to keep
+   * them alive.
+   */
+  backgroundSessionIds: Record<string, true>;
   multiInputEnabled: boolean;
   loading: boolean;
   error: string | null;
@@ -682,6 +694,11 @@ interface AppStateModel {
   dismissSessionNotification: (id: string) => void;
   clearReadSessionNotifications: () => void;
   setSessionSilenced: (sessionId: string, silenced: boolean) => void;
+  /**
+   * Keep `sessionId` out of the workspace. Selecting it anywhere clears this
+   * again — see `selectTab`.
+   */
+  markSessionBackground: (sessionId: string) => void;
   toggleMultiInput: () => boolean;
   /** Open a readonly code viewer tab for `path` in the focused pane. */
   openCodeViewerTab: (
@@ -696,6 +713,12 @@ interface AppStateModel {
   ) => void;
   /** Open a work summary tab for the current session or a provided worktree. */
   openWorkSummaryTab: (scope?: WorkSummaryTabScope) => Promise<void>;
+  /** Open the board tab for one project schedule in the focused pane. */
+  openScheduleTab: (input: {
+    repoPath: string;
+    scheduleId: string;
+    title: string;
+  }) => void;
   /** Close any frontend-owned tab and remove it from panes. */
   closeWorkspaceTab: (id: string) => void;
 }
@@ -898,6 +921,41 @@ function scopedWorkspaceViewMode(
 let indexedSessions: Session[] | null = null;
 let indexedSessionsById: ReadonlyMap<string, Session> = new Map();
 
+let workspaceSessionsSource: Session[] | null = null;
+let workspaceSessionsBackground: Record<string, true> | null = null;
+let workspaceSessionsResult: Session[] = [];
+
+/**
+ * Sessions the workspace is allowed to show. A background schedule run exists
+ * only in the daemon until the user reveals it, so it is absent here — panes
+ * drop it via `reconcileWorkspace`, and every list built off this selector
+ * (the sidebar, and the kanban/canvas views that derive from pane tabs) drops
+ * it too.
+ *
+ * Returns the original array when nothing is hidden, so the common case costs
+ * no allocation and triggers no extra renders.
+ */
+export function selectWorkspaceSessions(state: {
+  sessions: Session[];
+  backgroundSessionIds: Record<string, true>;
+}): Session[] {
+  if (
+    state.sessions !== workspaceSessionsSource ||
+    state.backgroundSessionIds !== workspaceSessionsBackground
+  ) {
+    workspaceSessionsSource = state.sessions;
+    workspaceSessionsBackground = state.backgroundSessionIds;
+    workspaceSessionsResult = state.sessions.some(
+      (session) => state.backgroundSessionIds[session.id],
+    )
+      ? state.sessions.filter(
+          (session) => !state.backgroundSessionIds[session.id],
+        )
+      : state.sessions;
+  }
+  return workspaceSessionsResult;
+}
+
 export function selectSessionsById(state: {
   sessions: Session[];
 }): ReadonlyMap<string, Session> {
@@ -1034,6 +1092,7 @@ function reconcileWorkspace(
   ws: ProjectWorkspace,
   sessions: Session[],
   allowEmptyWipe = true,
+  backgroundSessionIds: Record<string, true> = {},
 ): ProjectWorkspace {
   if (
     !allowEmptyWipe &&
@@ -1083,6 +1142,10 @@ function reconcileWorkspace(
   }
   for (const s of sessions) {
     if (isArchivedSession(s)) continue;
+    // A background session gets a tab only once the user asks for it
+    // (`revealBackgroundSession`); auto-assigning one would hand the focused
+    // pane to a schedule run the user never chose to watch.
+    if (backgroundSessionIds[s.id] && !assigned.has(s.id)) continue;
     if (!assigned.has(s.id)) {
       const pane = newPanes[target];
       newPanes[target] = {
@@ -1130,6 +1193,7 @@ function reconcileWorkspaces(
   activeProject: string | null,
   activeProjectFolderId: string | null,
   allowEmptyWipe = true,
+  backgroundSessionIds: Record<string, true> = {},
 ): {
   workspaces: Record<string, ProjectWorkspace>;
   projectFolders: ProjectFoldersByRepo;
@@ -1189,6 +1253,7 @@ function reconcileWorkspaces(
       existing,
       folderSessions,
       allowEmptyWipe,
+      backgroundSessionIds,
     );
   }
 
@@ -1390,7 +1455,10 @@ function findProjectFolder(
 }
 
 function latestNeedsInputSessionId(
-  state: Pick<AppStateModel, "sessions" | "sessionNotifications">,
+  state: Pick<
+    AppStateModel,
+    "sessions" | "sessionNotifications" | "backgroundSessionIds"
+  >,
 ): string | null {
   const sessionsById = new Map(
     state.sessions.map((session) => [session.id, session]),
@@ -1401,6 +1469,7 @@ function latestNeedsInputSessionId(
     if (
       session &&
       !isArchivedSession(session) &&
+      !state.backgroundSessionIds[session.id] &&
       session.status === "waiting_for_input"
     ) {
       return session.id;
@@ -1410,6 +1479,7 @@ function latestNeedsInputSessionId(
     const session = state.sessions[index];
     if (
       !isArchivedSession(session) &&
+      !state.backgroundSessionIds[session.id] &&
       session.status === "waiting_for_input"
     ) {
       return session.id;
@@ -1544,6 +1614,7 @@ function applySessionWorkspaceHint(
     state.activeProject,
     state.activeProjectFolderId,
     true,
+    state.backgroundSessionIds,
   );
   return {
     projectFolders: reconciled.projectFolders,
@@ -1804,6 +1875,7 @@ export const useAppStore = create<AppStateModel>()(
   pendingTerminalInput: {},
   sessionNotifications: [],
   silencedSessionIds: {},
+  backgroundSessionIds: {},
   multiInputEnabled: false,
   loading: false,
   error: null,
@@ -1860,6 +1932,7 @@ export const useAppStore = create<AppStateModel>()(
           s.activeProject,
           s.activeProjectFolderId,
           allowEmptyWipe,
+          s.backgroundSessionIds,
         );
         // Once the backend returns any sessions we trust subsequent empty
         // results to be intentional (user removed them all). Drop the guard.
@@ -1883,6 +1956,9 @@ export const useAppStore = create<AppStateModel>()(
           silencedSessionIds: shouldPruneActivity
             ? retainSessionIds(s.silencedSessionIds, sessionIds)
             : s.silencedSessionIds,
+          backgroundSessionIds: shouldPruneActivity
+            ? retainSessionIds(s.backgroundSessionIds, sessionIds)
+            : s.backgroundSessionIds,
           workspaces: reconciled.workspaces,
           projectFolders: reconciled.projectFolders,
           sessionFolderIds: reconciled.sessionFolderIds,
@@ -1935,6 +2011,7 @@ export const useAppStore = create<AppStateModel>()(
           s.activeProject,
           s.activeProjectFolderId,
           allowEmptyWipe,
+          s.backgroundSessionIds,
         );
         return {
           projects,
@@ -2011,6 +2088,7 @@ export const useAppStore = create<AppStateModel>()(
         s.activeProject,
         s.activeProjectFolderId,
         allowEmptyWipe,
+        s.backgroundSessionIds,
       );
       const nextSessionsLoadedCleanly = receivedSessions
         ? s.sessionsLoadedCleanly || sessions.length > 0
@@ -2034,6 +2112,9 @@ export const useAppStore = create<AppStateModel>()(
         silencedSessionIds: shouldPruneActivity
           ? retainSessionIds(s.silencedSessionIds, sessionIds)
           : s.silencedSessionIds,
+        backgroundSessionIds: shouldPruneActivity
+          ? retainSessionIds(s.backgroundSessionIds, sessionIds)
+          : s.backgroundSessionIds,
         workspaces: reconciled.workspaces,
         projectFolders: reconciled.projectFolders,
         sessionFolderIds: reconciled.sessionFolderIds,
@@ -2399,6 +2480,18 @@ export const useAppStore = create<AppStateModel>()(
       const tabIds = pane.tabIds.includes(id)
         ? pane.tabIds
         : [...pane.tabIds, id];
+      // This branch is the only way a session gains a tab outside reconcile,
+      // so clearing the flag here keeps "background" and "has a tab" from ever
+      // both being true — whichever path put it on screen counts as revealing
+      // it. Without this a hidden run pulled in by the needs-input hotkey would
+      // stay flagged and survive every later reconcile.
+      const backgroundSessionIds = s.backgroundSessionIds[id]
+        ? Object.fromEntries(
+            Object.entries(s.backgroundSessionIds).filter(
+              ([sessionId]) => sessionId !== id,
+            ),
+          )
+        : s.backgroundSessionIds;
       const newWs: ProjectWorkspace = {
         ...ws,
         panes: {
@@ -2413,6 +2506,7 @@ export const useAppStore = create<AppStateModel>()(
       const workspaces = { ...s.workspaces, [workspaceId]: newWs };
       return {
         workspaces,
+        backgroundSessionIds,
         activeProject: session.repo_path,
         activeProjectFolderId: workspaceId,
         archivedPreviewSessionId: null,
@@ -2433,6 +2527,50 @@ export const useAppStore = create<AppStateModel>()(
     // portal reattach. The pending id covers a terminal that was unmounted by
     // the resident limit and is not listening yet.
     if (id !== null) queueTerminalFocus(id);
+  },
+
+  markSessionBackground(sessionId) {
+    set((s) => {
+      // Also strip any tab the id already has. A session-list refresh can land
+      // between the create and this call, and `reconcileWorkspace` only skips
+      // background sessions that are still unassigned — so without this the
+      // stray tab would stick around for good.
+      const newWorkspaces: Record<string, ProjectWorkspace> = {};
+      for (const [key, ws] of Object.entries(s.workspaces)) {
+        const newPanes: Record<PaneId, PaneState> = {};
+        for (const [pid, pane] of Object.entries(ws.panes)) {
+          const ids = pane.tabIds.filter((id) => id !== sessionId);
+          if (ids.length === pane.tabIds.length) {
+            newPanes[pid as PaneId] = pane;
+            continue;
+          }
+          const activationHistory =
+            pane.activationHistory?.filter((id) => id !== sessionId) ?? [];
+          const nextActive =
+            pane.activeTabId === sessionId
+              ? preferredTabId({ activationHistory }, ids)
+              : pane.activeTabId;
+          newPanes[pid as PaneId] = {
+            ...withMinimizedTabIds(pane, ids),
+            activeTabId: nextActive,
+            activationHistory: activationHistoryFor(
+              { ...pane, activationHistory },
+              ids,
+              nextActive,
+            ),
+          };
+        }
+        newWorkspaces[key] = { ...ws, panes: newPanes };
+      }
+      return {
+        backgroundSessionIds: {
+          ...s.backgroundSessionIds,
+          [sessionId]: true,
+        },
+        workspaces: newWorkspaces,
+        ...mirrorActive(newWorkspaces, activeWorkspaceId(s), s),
+      };
+    });
   },
 
   openSessionSurface(id, options) {
@@ -2635,6 +2773,7 @@ export const useAppStore = create<AppStateModel>()(
         repoPath,
         created.id,
         true,
+        s.backgroundSessionIds,
       );
       return {
         projectFolders: reconciled.projectFolders,
@@ -2709,6 +2848,7 @@ export const useAppStore = create<AppStateModel>()(
         folder.repoPath,
         activeProjectFolderId,
         true,
+        s.backgroundSessionIds,
       );
       return {
         projectFolders: reconciled.projectFolders,
@@ -2755,6 +2895,7 @@ export const useAppStore = create<AppStateModel>()(
         s.activeProject,
         s.activeProjectFolderId,
         true,
+        s.backgroundSessionIds,
       );
       return {
         projectFolders: reconciled.projectFolders,
@@ -3409,6 +3550,7 @@ export const useAppStore = create<AppStateModel>()(
             s.activeProject,
             s.activeProjectFolderId,
             true,
+            s.backgroundSessionIds,
           );
           return {
             projectFolders: reconciled.projectFolders,
@@ -3519,6 +3661,7 @@ export const useAppStore = create<AppStateModel>()(
         s.activeProject,
         s.activeProjectFolderId,
         true,
+        s.backgroundSessionIds,
       );
       const liveInWorktree = { ...s.liveInWorktree };
       for (const removalId of removalIds) {
@@ -3548,6 +3691,10 @@ export const useAppStore = create<AppStateModel>()(
         ),
         silencedSessionIds: retainSessionIds(
           s.silencedSessionIds,
+          remainingSessionIds,
+        ),
+        backgroundSessionIds: retainSessionIds(
+          s.backgroundSessionIds,
           remainingSessionIds,
         ),
         workspaces: reconciled.workspaces,
@@ -3624,6 +3771,7 @@ export const useAppStore = create<AppStateModel>()(
         s.activeProject,
         s.activeProjectFolderId,
         true,
+        s.backgroundSessionIds,
       );
       // Archiving is a park, not a request to look at the parked session:
       // only an already-open preview survives. Forcing the preview open here
@@ -4155,6 +4303,7 @@ export const useAppStore = create<AppStateModel>()(
           s.activeProject,
           activeProjectFolderId,
           true,
+          s.backgroundSessionIds,
         );
         return {
           sessions,
@@ -4166,6 +4315,10 @@ export const useAppStore = create<AppStateModel>()(
           ),
           silencedSessionIds: retainSessionIds(
             s.silencedSessionIds,
+            remainingSessionIds,
+          ),
+          backgroundSessionIds: retainSessionIds(
+            s.backgroundSessionIds,
             remainingSessionIds,
           ),
           workspaces: reconciled.workspaces,
@@ -4724,6 +4877,40 @@ export const useAppStore = create<AppStateModel>()(
     }
   },
 
+  openScheduleTab(input) {
+    set((s) => {
+      const workspaceId = activeWorkspaceId(s);
+      if (!workspaceId) return s;
+      const ws = s.workspaces[workspaceId];
+      if (!ws) return s;
+      const focused = ws.focusedPaneId;
+      const pane = ws.panes[focused];
+      if (!pane) return s;
+      // The tab id is derived from the schedule id, so reopening the same
+      // schedule refocuses its board instead of stacking duplicates.
+      const tab = makeScheduleWorkspaceTab(input);
+      const alreadyInPane = pane.tabIds.includes(tab.id);
+      const newPane: PaneState = alreadyInPane
+        ? activatePaneTab(pane, tab.id)
+        : {
+            ...activatePaneTab(pane, tab.id),
+            tabIds: [...pane.tabIds, tab.id],
+          };
+      const newWorkspaces = {
+        ...s.workspaces,
+        [workspaceId]: {
+          ...ws,
+          panes: { ...ws.panes, [focused]: newPane },
+        },
+      };
+      return {
+        workspaceTabs: { ...s.workspaceTabs, [tab.id]: tab },
+        workspaces: newWorkspaces,
+        ...mirrorActive(newWorkspaces, workspaceId, s),
+      };
+    });
+  },
+
   closeWorkspaceTab(id) {
     set((s) => {
       if (!isWorkspaceTabId(id)) return s;
@@ -4774,6 +4961,7 @@ export const useAppStore = create<AppStateModel>()(
         rightTabByGroup: state.rightTabByGroup,
         sessionNotifications: state.sessionNotifications,
         silencedSessionIds: state.silencedSessionIds,
+        backgroundSessionIds: state.backgroundSessionIds,
         workspaceTabs: Object.fromEntries(
           Object.entries(state.workspaceTabs).filter(([, tab]) =>
             isRestorableWorkspaceTab(tab),
@@ -4942,6 +5130,9 @@ export const useAppStore = create<AppStateModel>()(
         );
         state.silencedSessionIds = normalizeSilencedSessionIds(
           state.silencedSessionIds,
+        );
+        state.backgroundSessionIds = normalizeSilencedSessionIds(
+          state.backgroundSessionIds,
         );
         state.activeProjectFolderId =
           state.activeProjectFolderId ??
