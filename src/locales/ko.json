@@ -1852,6 +1852,7 @@
       "allFilter": "전체",
       "refresh": "새로고침",
       "empty": "아직 메모가 없습니다",
+      "emptyFiltered": "{status} 메모가 없습니다",
       "loading": "메모를 불러오는 중…",
       "loadFailed": "메모를 불러오지 못했습니다.",
       "save": "저장",

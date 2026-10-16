@@ -33,6 +33,7 @@ import {
   GitPullRequestClosed,
   Globe,
   History,
+  LayoutPanelLeft,
   Loader2,
   ListChecks,
   ListTodo,
@@ -862,7 +863,7 @@ function rightTabShortcut(
 function groupIcon(group: RightGroup): ReactNode {
   switch (group) {
     case "workspace":
-      return <ListChecks size={14} />;
+      return <LayoutPanelLeft size={14} />;
     case "code":
       return <Code2 size={14} />;
     case "github":

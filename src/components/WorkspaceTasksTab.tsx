@@ -44,9 +44,9 @@ const TASK_LIST_FILTERS: ProjectTaskStatus[] = [
   "canceled",
 ];
 
-// `null` is All: every group at once, and the default view. The open
-// statuses fit the rest of the toolbar row; done and canceled stay in the
-// grouped list, reached from their section header.
+// `null` is All. Done and canceled stay out of this row — their section
+// headers filter the list — so the chips that remain can scroll without
+// pushing Refresh and New off the right edge.
 const CHIP_FILTERS: (ProjectTaskStatus | null)[] = [
   null,
   "todo",
@@ -224,8 +224,7 @@ export function WorkspaceTasksTab({
   const groups = TASK_LIST_FILTERS.flatMap((status) => {
     if (listFilter !== null && status !== listFilter) return [];
     const items = tasks.filter((task) => task.status === status);
-    // The active filter's header is the only way out of Done or Canceled.
-    if (items.length === 0 && listFilter !== status) return [];
+    if (items.length === 0) return [];
     return [{ status, items }];
   });
   const menuTask = menu?.task ?? null;
@@ -285,44 +284,46 @@ export function WorkspaceTasksTab({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-        {CHIP_FILTERS.map((filter) => (
-          <button
-            key={filter ?? "all"}
+      <div className="flex shrink-0 items-center border-b border-border">
+        <div className="acorn-no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-2 py-1.5">
+          {CHIP_FILTERS.map((filter) => (
+            <button
+              key={filter ?? "all"}
+              type="button"
+              aria-pressed={listFilter === filter}
+              onClick={() =>
+                filter === null ? setListFilter(null) : toggleListFilter(filter)
+              }
+              className={cn(
+                "shrink-0 rounded-md px-2 py-0.5 text-[11px] transition",
+                listFilter === filter
+                  ? "bg-bg-elevated text-fg"
+                  : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
+              )}
+            >
+              {filter === null
+                ? t("rightPanel.tasks.allFilter")
+                : t(STATUS_LABEL[filter])}
+            </button>
+          ))}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 px-2 py-1.5">
+          <RefreshButton
+            loading={loading}
+            size={12}
+            title={t("rightPanel.tasks.refresh")}
+            ariaLabel={t("rightPanel.tasks.refresh")}
+            onClick={() => setRevision((current) => current + 1)}
+          />
+          <Button
             type="button"
-            aria-pressed={listFilter === filter}
-            onClick={() =>
-              filter === null ? setListFilter(null) : toggleListFilter(filter)
-            }
-            className={cn(
-              "shrink-0 rounded-md px-2 py-0.5 text-[11px] transition",
-              listFilter === filter
-                ? "bg-bg-elevated text-fg"
-                : "text-fg-muted hover:bg-bg-elevated/50 hover:text-fg",
-            )}
+            variant="primary"
+            size="xs"
+            onClick={() => setEditor({ mode: "create" })}
           >
-            {filter === null
-              ? t("rightPanel.tasks.allFilter")
-              : t(STATUS_LABEL[filter])}
-          </button>
-        ))}
-        <span className="min-w-1 flex-1" />
-        <RefreshButton
-          loading={loading}
-          size={12}
-          title={t("rightPanel.tasks.refresh")}
-          ariaLabel={t("rightPanel.tasks.refresh")}
-          onClick={() => setRevision((current) => current + 1)}
-          className="shrink-0"
-        />
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          onClick={() => setEditor({ mode: "create" })}
-        >
-          {t("rightPanel.tasks.new")}
-        </Button>
+            {t("rightPanel.tasks.new")}
+          </Button>
+        </div>
       </div>
       {error ? (
         <div className="px-3 pb-2 text-xs text-danger" role="alert">
@@ -336,31 +337,39 @@ export function WorkspaceTasksTab({
           const target = event.target;
           if (!(target instanceof Element)) return;
           if (target.closest("[data-task-row], [data-task-group-header]")) return;
+          // New tasks are created as todo, so a double-click under another
+          // filter would save a row this list cannot show.
+          if (listFilter !== null && listFilter !== "todo") return;
           onEmptyAreaClick(event);
         }}
       >
         {loading && tasks.length === 0 ? (
           <ListEmptyState>{t("rightPanel.tasks.loading")}</ListEmptyState>
         ) : groups.length === 0 ? (
-          <ListEmptyState>{t("rightPanel.tasks.empty")}</ListEmptyState>
+          <ListEmptyState>
+            {listFilter !== null && tasks.length > 0
+              ? t("rightPanel.tasks.emptyFiltered").replace(
+                  "{status}",
+                  t(STATUS_LABEL[listFilter]),
+                )
+              : t("rightPanel.tasks.empty")}
+          </ListEmptyState>
         ) : (
           <div className="flex flex-col">
             {groups.map((group) => (
               <section key={group.status}>
-                <button
-                  type="button"
-                  data-task-group-header
-                  aria-pressed={listFilter === group.status}
-                  onClick={() => toggleListFilter(group.status)}
-                  className={cn(
-                    "flex w-full items-center px-3 pt-2 pb-0.5 text-left text-[10px] font-medium uppercase tracking-wide",
-                    listFilter === group.status ? "text-fg" : "text-fg-muted",
-                  )}
-                >
-                  <span className={STATUS_TONE[group.status]}>
-                    {t(STATUS_LABEL[group.status])}
-                  </span>
-                </button>
+                {listFilter === null ? (
+                  <button
+                    type="button"
+                    data-task-group-header
+                    onClick={() => toggleListFilter(group.status)}
+                    className="flex w-full items-center px-3 pt-2 pb-0.5 text-left text-[10px] font-medium uppercase tracking-wide text-fg-muted"
+                  >
+                    <span className={STATUS_TONE[group.status]}>
+                      {t(STATUS_LABEL[group.status])}
+                    </span>
+                  </button>
+                ) : null}
                 <ul className={listBoxClassName()}>
                   {group.items.map((task) => (
                     <ListActionRow

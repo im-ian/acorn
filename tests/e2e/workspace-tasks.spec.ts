@@ -178,16 +178,15 @@ test("workspace tasks can be created, commented, and closed", async ({
   await expect(row.locator("span.text-purple-400")).toHaveText("Done");
   await panel.getByRole("button", { name: "Done", exact: true }).click();
   await expect(row).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Done", exact: true }),
+  ).toHaveCount(0);
   await row.click();
   const reopened = page.getByRole("dialog", { name: /Fix the panel/ });
   await reopened.getByLabel("Status").selectOption("todo");
-  await expect(panel.getByRole("button", { name: "Done", exact: true })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
   await expect(row).toHaveCount(0);
   await reopened.getByRole("button", { name: "Close" }).click();
-  await panel.getByRole("button", { name: "Done", exact: true }).click();
+  await panel.getByRole("button", { name: "All", exact: true }).click();
   await expect(row).toBeVisible();
   if (shot) {
     await panel.screenshot({ path: shot.replace(/\.png$/, "-list.png") });

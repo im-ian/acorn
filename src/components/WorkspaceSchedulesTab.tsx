@@ -163,14 +163,13 @@ export function WorkspaceSchedulesTab({ repoPath }: { repoPath: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+      <div className="flex shrink-0 items-center justify-end gap-1 border-b border-border px-2 py-1.5">
         <RefreshButton
           loading={loading}
           size={12}
           title={t("rightPanel.schedules.refresh")}
           ariaLabel={t("rightPanel.schedules.refresh")}
           onClick={() => setRevision((current) => current + 1)}
-          className="ml-auto"
         />
         <Button
           type="button"
