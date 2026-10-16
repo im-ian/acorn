@@ -81,12 +81,24 @@ describe("WorkspaceTasksTab filters", () => {
     expect(groupHeaders()).toEqual(["Todo", "In progress", "Done"]);
   });
 
+  it("names an empty filter instead of saying the project has no tasks", async () => {
+    await render();
+    await act(async () => {
+      chip("In review").click();
+    });
+    expect(container.textContent).toContain("No In review tasks");
+    expect(container.textContent).not.toContain("No tasks yet");
+    expect(container.textContent).not.toContain("Task 1");
+  });
+
   it("narrows to one status, then All restores the full list", async () => {
     await render();
     await act(async () => {
       chip("Todo").click();
     });
-    expect(groupHeaders()).toEqual(["Todo"]);
+    expect(groupHeaders()).toEqual([]);
+    expect(container.textContent).toContain("Task 1");
+    expect(container.textContent).not.toContain("Task 2");
     await act(async () => {
       chip("All").click();
     });

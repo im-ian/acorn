@@ -1852,6 +1852,7 @@
       "allFilter": "All",
       "refresh": "Refresh",
       "empty": "No tasks yet",
+      "emptyFiltered": "No {status} tasks",
       "loading": "Loading tasks…",
       "loadFailed": "Couldn't load tasks.",
       "save": "Save",
