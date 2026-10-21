@@ -1,7 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  CHANGELOG_CATEGORIES,
+  CHANGELOG_EXCLUDED_AUTHORS,
+  CHANGELOG_EXCLUDED_LABELS,
   addReleaseSectionSummaries,
   composeReleaseNotes,
+  formatRecoveredReleaseNotes,
 } from "./release-notes.mjs";
 
 describe("addReleaseSectionSummaries", () => {
@@ -92,5 +97,92 @@ describe("composeReleaseNotes", () => {
         "* feat(ui): add settings shortcut by @im-ian in #1",
       ].join("\n"),
     );
+  });
+});
+
+describe("formatRecoveredReleaseNotes", () => {
+  const pulls = [
+    {
+      title: "feat(panel): keep project tasks in the Workspace tab",
+      url: "https://github.com/im-ian/acorn/pull/984",
+      author: "im-ian",
+      labels: ["feat"],
+    },
+    {
+      title: "fix(terminal): open a clicked link in one browser tab",
+      url: "https://github.com/im-ian/acorn/pull/983",
+      author: "im-ian",
+      labels: ["fix"],
+    },
+    {
+      title: "chore(release): v1.41.0",
+      url: "https://github.com/im-ian/acorn/pull/1000",
+      author: "im-ian",
+      labels: ["skip-changelog"],
+    },
+    {
+      title: "chore(deps): bump rust",
+      url: "https://github.com/im-ian/acorn/pull/989",
+      author: "app/dependabot",
+      labels: ["dependencies"],
+    },
+    {
+      title: "docs(readme): condense the feature guide",
+      url: "https://github.com/im-ian/acorn/pull/981",
+      author: "im-ian",
+      labels: ["docs"],
+    },
+  ];
+
+  it("groups commit-subject PRs and drops excluded ones", () => {
+    const notes = formatRecoveredReleaseNotes({
+      tag: "v1.41.0",
+      previousTag: "v1.40.0",
+      repo: "im-ian/acorn",
+      pulls,
+    });
+
+    expect(notes).toBe(
+      [
+        "## What's Changed",
+        "### 🚀 Features",
+        "* feat(panel): keep project tasks in the Workspace tab by @im-ian in https://github.com/im-ian/acorn/pull/984",
+        "### 🐛 Fixes",
+        "* fix(terminal): open a clicked link in one browser tab by @im-ian in https://github.com/im-ian/acorn/pull/983",
+        "### 📝 Docs",
+        "* docs(readme): condense the feature guide by @im-ian in https://github.com/im-ian/acorn/pull/981",
+        "",
+        "**Full Changelog**: https://github.com/im-ian/acorn/compare/v1.40.0...v1.41.0",
+      ].join("\n"),
+    );
+    expect(addReleaseSectionSummaries(notes)).toContain(
+      "> keep project tasks in the Workspace tab 기능 업데이트가 포함되었어요.<br>",
+    );
+    expect(addReleaseSectionSummaries(notes)).toContain(
+      "> Feature updates: keep project tasks in the Workspace tab.",
+    );
+  });
+
+  it("uses the same categories as .github/release.yml", () => {
+    const yml = readFileSync(".github/release.yml", "utf8");
+    const titles = [...yml.matchAll(/^ {4}- title: (.+)$/gm)].map((match) => match[1]);
+    const labelBlocks = yml
+      .split(/^ {4}- title: /m)
+      .slice(1)
+      .map((block) => [...block.matchAll(/^ {8}- (.+)$/gm)].map((match) => match[1]));
+    const exclude = yml.slice(yml.indexOf("exclude:"), yml.indexOf("categories:"));
+
+    expect(CHANGELOG_CATEGORIES.map((category) => category.title)).toEqual(titles);
+    expect(CHANGELOG_CATEGORIES.map((category) => category.labels)).toEqual(
+      labelBlocks.map((labels) =>
+        labels.map((label) => label.replaceAll('"', "")),
+      ),
+    );
+    for (const label of CHANGELOG_EXCLUDED_LABELS) {
+      expect(exclude).toContain(`- ${label}`);
+    }
+    for (const author of CHANGELOG_EXCLUDED_AUTHORS) {
+      expect(exclude).toContain(`- ${author}`);
+    }
   });
 });

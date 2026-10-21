@@ -208,6 +208,141 @@ function readGitTags() {
   return stdout.split(/\r?\n/).filter(Boolean);
 }
 
+function hasChangelogEntries(body) {
+  return body.split(/\r?\n/).some((line) => ENTRY_RE.test(line));
+}
+
+// Same order as `.github/release.yml`. GitHub matches top to bottom.
+export const CHANGELOG_EXCLUDED_LABELS = ["skip-changelog", "duplicate"];
+export const CHANGELOG_EXCLUDED_AUTHORS = ["dependabot", "github-actions"];
+export const CHANGELOG_CATEGORIES = [
+  { title: "🚀 Features", labels: ["feat", "feature", "enhancement"] },
+  { title: "🐛 Fixes", labels: ["fix", "bug", "bugfix"] },
+  { title: "⚡ Performance", labels: ["performance", "perf"] },
+  { title: "🔒 Security", labels: ["security"] },
+  { title: "📝 Docs", labels: ["docs", "documentation"] },
+  {
+    title: "🧹 Refactor & chore",
+    labels: ["refactor", "chore", "cleanup", "branding"],
+  },
+  { title: "🛠️ Build & CI", labels: ["ci", "build", "dependencies", "deps"] },
+  { title: "🔧 Other changes", labels: ["*"] },
+];
+
+function isExcludedChangelogAuthor(login) {
+  const normalized = login.toLowerCase().replace(/\[bot\]$/, "");
+  return CHANGELOG_EXCLUDED_AUTHORS.some(
+    (name) =>
+      normalized === name ||
+      normalized.endsWith(`/${name}`) ||
+      normalized.startsWith(`${name}/`),
+  );
+}
+
+export function formatRecoveredReleaseNotes({
+  tag,
+  previousTag,
+  repo,
+  pulls,
+}) {
+  const excludedLabels = new Set(CHANGELOG_EXCLUDED_LABELS);
+  const groups = CHANGELOG_CATEGORIES.map((category) => ({
+    title: category.title,
+    labels: category.labels,
+    pulls: [],
+  }));
+
+  for (const pull of pulls) {
+    const labels = pull.labels.map((label) => label.toLowerCase());
+    if (labels.some((label) => excludedLabels.has(label))) continue;
+    if (isExcludedChangelogAuthor(pull.author)) continue;
+    const category = groups.find(
+      (group) =>
+        group.labels.includes("*") ||
+        group.labels.some((label) => labels.includes(label)),
+    );
+    if (!category) continue;
+    category.pulls.push(pull);
+  }
+
+  const sections = groups
+    .filter((group) => group.pulls.length > 0)
+    .map((group) => {
+      const lines = group.pulls.map(
+        (pull) => `* ${pull.title} by @${pull.author} in ${pull.url}`,
+      );
+      return [`### ${group.title}`, ...lines].join("\n");
+    });
+  if (sections.length === 0) return "";
+
+  const compare = previousTag
+    ? `**Full Changelog**: https://github.com/${repo}/compare/${previousTag}...${tag}`
+    : `**Full Changelog**: https://github.com/${repo}/commits/${tag}`;
+  return ["## What's Changed", ...sections, "", compare].join("\n");
+}
+
+function commitExists(ref) {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pullNumbersSince(previousTag, tag) {
+  const end = commitExists(tag) ? tag : "HEAD";
+  const stdout = execFileSync(
+    "git",
+    ["log", "--reverse", "--format=%s", `${previousTag}..${end}`],
+    { encoding: "utf8" },
+  );
+  const numbers = [];
+  const seen = new Set();
+  for (const subject of stdout.split(/\r?\n/)) {
+    const match = /\(#(\d+)\)/.exec(subject);
+    if (!match || seen.has(match[1])) continue;
+    seen.add(match[1]);
+    numbers.push(match[1]);
+  }
+  return numbers;
+}
+
+function readPull(repo, number) {
+  const stdout = execFileSync(
+    "gh",
+    [
+      "pr",
+      "view",
+      number,
+      "--repo",
+      repo,
+      "--json",
+      "number,title,url,labels,author",
+    ],
+    { encoding: "utf8" },
+  );
+  const pull = JSON.parse(stdout);
+  return {
+    title: pull.title,
+    url: pull.url,
+    author: pull.author?.login ?? "",
+    labels: (pull.labels ?? []).map((label) => label.name).filter(Boolean),
+  };
+}
+
+// GitHub's generator only lists a PR when that PR's merge commit is inside
+// the tag range. The commits on main are unsigned copies of those merges, so
+// the generator returns an empty changelog. The copy still ends with `(#123)`.
+function recoverNotesFromCommitSubjects(repo, tag, previousTag) {
+  const pulls = pullNumbersSince(previousTag, tag).map((number) =>
+    readPull(repo, number),
+  );
+  return formatRecoveredReleaseNotes({ tag, previousTag, repo, pulls });
+}
+
 function generateNotes(repo, tag, previousTag) {
   const args = [
     "api",
@@ -229,9 +364,12 @@ function generateNotes(repo, tag, previousTag) {
       `previous_tag_name=${previousTag}`,
     );
   }
-  return stripGithubGeneratedComments(
+  const generated = stripGithubGeneratedComments(
     execFileSync("gh", args, { encoding: "utf8" }),
   );
+  if (hasChangelogEntries(generated) || !previousTag) return generated;
+  const recovered = recoverNotesFromCommitSubjects(repo, tag, previousTag);
+  return recovered || generated;
 }
 
 export function composeReleaseNotes(parts) {
