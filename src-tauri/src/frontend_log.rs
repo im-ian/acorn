@@ -5,6 +5,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::error::AppResult;
 use crate::persistence;
@@ -15,6 +16,10 @@ const ROTATED_LOG_FILE: &str = "frontend.log.1";
 const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_ENTRY_BYTES: usize = 16 * 1024;
 
+/// Two entries landing at the size limit would both rotate and drop the
+/// first one's line.
+static APPEND_LOCK: Mutex<()> = Mutex::new(());
+
 fn not_a_real_path(what: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
@@ -23,6 +28,9 @@ fn not_a_real_path(what: &str) -> io::Error {
 }
 
 fn append(data_dir: &Path, entry: &str) -> io::Result<()> {
+    let _guard = APPEND_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = data_dir.join(LOG_DIR);
     match fs::symlink_metadata(&dir) {
         Ok(meta) if meta.file_type().is_dir() => {}

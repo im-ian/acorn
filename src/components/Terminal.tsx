@@ -104,12 +104,15 @@ import {
 } from "../lib/terminalScrollback";
 import {
   clearRememberedTerminalScrollback,
+  consumeTerminalSnapshotStale,
+  markTerminalSnapshotStale,
   rememberedTerminalScrollback,
   rememberTerminalScrollback,
 } from "../lib/terminalScrollbackHandoff";
 import {
   takeTerminalFocus,
   clearTerminalFocus,
+  rememberTerminalFocus,
   terminalFocusBlockedByTextEntry,
 } from "../lib/terminalFocus";
 import {
@@ -274,9 +277,20 @@ const COMPOSING_CLASS = "acorn-terminal-composing";
  *  cloned line tail, which is the TUI chrome after the cursor. */
 const CARET_CELL_GRID_INSET_PX = 1;
 
-/** How long Refresh waits for queued output to parse before treating xterm
- *  as dead and rebuilding the terminal instead. */
-const REFRESH_DRAIN_TIMEOUT_MS = 2000;
+/** How long to wait for queued output to parse before treating xterm as
+ *  dead. */
+const OUTPUT_DRAIN_TIMEOUT_MS = 2000;
+
+/** A dead xterm never calls back, so anything waiting on its writer needs a
+ *  bound. */
+function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  return Promise.race([
+    promise.then(() => true),
+    new Promise<boolean>((resolve) => {
+      window.setTimeout(() => resolve(false), ms);
+    }),
+  ]);
+}
 // xterm briefly leaves and re-enters hovered links when refreshed rows repaint.
 const LINK_TOOLTIP_HIDE_GRACE_MS = 80;
 
@@ -4137,6 +4151,12 @@ export function Terminal({
       }
       replacingStalledMount = true;
       logFrontendEvent("terminal.remount", detail);
+      // The new xterm opens unfocused. Keystrokes typed into the frozen view
+      // would otherwise be dropped until the user clicks.
+      if (container.contains(document.activeElement)) {
+        rememberTerminalFocus(sessionId);
+      }
+      markTerminalSnapshotStale(sessionId);
       markTerminalDetaching(sessionId);
       setMountGeneration((generation) => generation + 1);
     };
@@ -4166,14 +4186,12 @@ export function Terminal({
       }
       if (disposed) return;
       outputWriter.discardPending();
-      // A dead xterm never calls back, so this would wait forever and
-      // nothing below could paint. Rebuild the terminal instead.
-      const drained = await Promise.race([
-        outputWriter.whenIdle().then(() => true),
-        new Promise<boolean>((resolve) => {
-          window.setTimeout(() => resolve(false), REFRESH_DRAIN_TIMEOUT_MS);
-        }),
-      ]);
+      // A dead xterm never drains, and nothing below could paint on it.
+      // Rebuild the terminal instead.
+      const drained = await settlesWithin(
+        outputWriter.whenIdle(),
+        OUTPUT_DRAIN_TIMEOUT_MS,
+      );
       if (disposed) return;
       if (!drained) {
         await remountStalledTerminal("refresh-drain-timeout");
@@ -4492,11 +4510,14 @@ export function Terminal({
           sessionId,
         });
         if (disposed) return;
-        const handoff = rememberedTerminalScrollback(sessionId);
+        const snapshotStale = consumeTerminalSnapshotStale(sessionId);
+        const handoff = snapshotStale
+          ? null
+          : rememberedTerminalScrollback(sessionId);
         const restorePlan = planTerminalRestore({
           daemonAlive: daemonSessionAliveAtMount,
           handoff,
-          disk: saved,
+          disk: snapshotStale ? null : saved,
         });
         replayScrollbackOnSpawn = restorePlan.replayScrollback;
         preserveOverlayOnSpawn = false;
@@ -4834,11 +4855,22 @@ export function Terminal({
         // resulting buffer before releasing the frontend terminal resources.
         void (async () => {
           try {
-            await outputWriter.drainAndDispose();
-            await persistScrollbackAsync({
-              force: true,
-              skipOutputDrain: true,
-            });
+            // A frozen terminal never drains. Bound the wait so it is still
+            // disposed, and keep its frozen frame from being restored.
+            if (
+              await settlesWithin(
+                outputWriter.drainAndDispose(),
+                OUTPUT_DRAIN_TIMEOUT_MS,
+              )
+            ) {
+              await persistScrollbackAsync({
+                force: true,
+                skipOutputDrain: true,
+              });
+            } else {
+              outputWriter.dispose();
+              markTerminalSnapshotStale(sessionId);
+            }
           } finally {
             disposeTerminalResources();
           }
