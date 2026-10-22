@@ -2,6 +2,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { AppRecoveryBoundary } from "./components/AppRecoveryBoundary";
+import { installFrontendErrorLog } from "./lib/frontendLog";
+
+installFrontendErrorLog();
 
 // Block right-click context menu (Inspector access) globally.
 window.addEventListener("contextmenu", (e) => e.preventDefault());
