@@ -67,6 +67,27 @@ describe("createTerminalOutputWriter", () => {
     expect(writer.pendingBytes()).toBe(0);
   });
 
+  it("reports a write xterm has not parsed yet", () => {
+    const frames = createFrameScheduler();
+    let parsed: (() => void) | null = null;
+    const writer = createTerminalOutputWriter({
+      write: (_chunk, onParsed) => {
+        parsed = onParsed;
+      },
+      afterWrite: vi.fn(),
+      isActive: () => true,
+      requestFrame: frames.requestFrame,
+      cancelFrame: frames.cancelFrame,
+    });
+
+    writer.enqueue(bytes("a"));
+    frames.runFrame();
+    expect(writer.progress()).toEqual({ writing: true, completed: 0 });
+
+    parsed!();
+    expect(writer.progress()).toEqual({ writing: false, completed: 1 });
+  });
+
   it("flushes inactive output on a slower cadence with a smaller batch budget", () => {
     vi.useFakeTimers();
     const written: string[] = [];

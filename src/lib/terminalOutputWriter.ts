@@ -6,6 +6,8 @@ export interface TerminalOutputWriter {
   discardPending(): void;
   dispose(): void;
   pendingBytes(): number;
+  /** Whether a write is waiting on xterm, and how many have finished. */
+  progress(): { writing: boolean; completed: number };
 }
 
 interface TerminalOutputWriterOptions {
@@ -93,6 +95,7 @@ export function createTerminalOutputWriter({
   let disposed = false;
   let closing = false;
   let writing = false;
+  let completedWrites = 0;
   let frame: number | null = null;
   let timer: number | null = null;
   let immediateFlushPending = false;
@@ -192,6 +195,7 @@ export function createTerminalOutputWriter({
     writing = true;
     write(batch.bytes, () => {
       writing = false;
+      completedWrites += 1;
       if (!disposed) {
         afterWrite();
         scheduleFlush(false, closing || queuedBytes >= maxQueuedBytes);
@@ -277,6 +281,9 @@ export function createTerminalOutputWriter({
     },
     pendingBytes() {
       return queuedBytes;
+    },
+    progress() {
+      return { writing, completed: completedWrites };
     },
   };
 }
