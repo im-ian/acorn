@@ -10,7 +10,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
 import { ArrowDownToLine } from "lucide-react";
@@ -63,6 +63,10 @@ import {
   createTerminalOutputWriter,
   type TerminalOutputWriter,
 } from "../lib/terminalOutputWriter";
+import {
+  createPtyOutputChannel,
+  type PtyOutputChannel,
+} from "../lib/ptyOutputChannel";
 import {
   findConversationPromptTarget,
   scanForContextPrompt,
@@ -896,15 +900,6 @@ function decodePtyChannelPayload(payload: unknown): Uint8Array {
     return decodeBase64ToBytes((payload as { data: string }).data);
   }
   throw new Error("unsupported pty output payload");
-}
-
-function unregisterTauriChannel(channel: Channel<unknown>) {
-  const internals = (
-    window as typeof window & {
-      __TAURI_INTERNALS__?: { unregisterCallback?: (id: number) => void };
-    }
-  ).__TAURI_INTERNALS__;
-  internals?.unregisterCallback?.(channel.id);
 }
 
 function encodeStringToBase64(input: string): string {
@@ -4065,6 +4060,15 @@ export function Terminal({
     const refreshMountedTerminal = async () => {
       const redraw = terminalRefreshRedraw(term);
       const modes = snapshotTerminalRefreshModes(term);
+      // A chunk lost on the current channel holds back every later one, so
+      // nothing below would ever paint. Swapping first also lands the redraw
+      // on the new channel.
+      try {
+        await subscribeOutputChannel();
+      } catch (err) {
+        console.warn("[Terminal] output resubscribe failed", err);
+      }
+      if (disposed) return;
       outputWriter.discardPending();
       await outputWriter.whenIdle();
       if (disposed) return;
@@ -4142,45 +4146,68 @@ export function Terminal({
       scheduleLiveCwdProbe();
     };
     let outputSubscriptionToken: number | null = null;
-
-    (async () => {
-      let outputChannel: Channel<unknown> | null = null;
-      try {
-        outputChannel = new Channel<unknown>((payload) => {
+    let outputChannel: PtyOutputChannel | null = null;
+    const releaseOutputChannel = (channel: PtyOutputChannel, token: number) => {
+      invoke("pty_unsubscribe_output", { sessionId, token })
+        .catch(() => {
+          // best effort
+        })
+        .finally(() => channel.dispose());
+    };
+    // Each call replaces this session's Rust-side subscription. Refresh calls
+    // it again so a channel that lost a chunk is swapped out in place.
+    const subscribeOutputChannel = async () => {
+      const channel = createPtyOutputChannel(
+        (payload) => {
           if (disposed) return;
           try {
             handlePtyOutput(decodePtyChannelPayload(payload));
           } catch (err) {
             console.error("[Terminal] decode channel payload failed", err);
           }
-        });
-        const outputToken = await invoke<number>("pty_subscribe_output", {
+        },
+        {
+          // The dropped bytes are gone; a TUI repaints the whole frame on
+          // SIGWINCH, which covers whatever they would have drawn.
+          onGap: () => {
+            console.warn("[Terminal] pty output chunk lost", sessionId);
+            if (!disposed && ptyReady) void pulseRemountedPty();
+          },
+        },
+      );
+      let token: number;
+      try {
+        token = await invoke<number>("pty_subscribe_output", {
           sessionId,
-          channel: outputChannel,
+          channel,
         });
-        outputSubscriptionToken = outputToken;
-        const subscribedOutputChannel = outputChannel;
-        if (disposed) {
-          invoke("pty_unsubscribe_output", {
-            sessionId,
-            token: outputToken,
-          })
-            .catch(() => {
-              // best effort
-            })
-            .finally(() => unregisterTauriChannel(subscribedOutputChannel));
-          return;
-        }
-        unlistenFns.push(() => {
-          invoke("pty_unsubscribe_output", {
-            sessionId,
-            token: outputToken,
-          })
-            .catch(() => {
-              // best effort
-            })
-            .finally(() => unregisterTauriChannel(subscribedOutputChannel));
-        });
+      } catch (err) {
+        channel.dispose();
+        throw err;
+      }
+      const previous = outputChannel;
+      const previousToken = outputSubscriptionToken;
+      outputSubscriptionToken = token;
+      if (disposed) {
+        releaseOutputChannel(channel, token);
+        return;
+      }
+      outputChannel = channel;
+      if (previous && previousToken !== null) {
+        releaseOutputChannel(previous, previousToken);
+      }
+    };
+    unlistenFns.push(() => {
+      if (outputChannel && outputSubscriptionToken !== null) {
+        releaseOutputChannel(outputChannel, outputSubscriptionToken);
+      }
+      outputChannel = null;
+    });
+
+    (async () => {
+      try {
+        await subscribeOutputChannel();
+        if (disposed) return;
 
         const unlistenOutput = await listen<PtyOutputPayload>(
           `pty:output:${sessionId}`,
@@ -4293,9 +4320,6 @@ export function Terminal({
         }
         unlistenFns.push(unlistenExit);
       } catch (err) {
-        if (outputChannel) {
-          unregisterTauriChannel(outputChannel);
-        }
         if (!disposed) {
           term.write(
             `\r\n${ANSI_RED}[acorn] Failed to attach pty listeners: ${formatError(err)}${ANSI_RESET}\r\n`,

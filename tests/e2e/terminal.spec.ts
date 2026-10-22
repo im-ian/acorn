@@ -184,10 +184,9 @@ async function emitNativeFileDragEvent(
   );
 }
 
-// Tauri's `Channel` only dispatches a message when its `index` matches the
-// next expected one, so successive emits on the same channel must carry
-// monotonically increasing indices — reusing `0` silently buffers the message
-// and it never reaches the terminal.
+// The output channel dispatches messages in `index` order, so successive
+// emits on the same channel must carry increasing indices. A reused or
+// skipped index holds later messages back until the gap timeout.
 async function emitSubscribedPtyOutput(
   page: Page,
   channelIdKey: string,
@@ -552,6 +551,14 @@ async function terminalEmojiLetterSpacing(
       return Number.isFinite(parsed) ? parsed : 0;
     },
     { marker, emoji },
+  );
+}
+
+function terminalRowsText(page: Page): Promise<string> {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll(".xterm-rows > div"))
+      .map((row) => row.textContent ?? "")
+      .join("\n"),
   );
 }
 
@@ -1382,6 +1389,91 @@ test.describe("terminal: spawn", () => {
       8,
     );
     await expectOutlineCursor(page);
+  });
+
+  test("skips a lost output chunk instead of freezing the terminal", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      (window as unknown as { __outputChannelId?: number }).__outputChannelId =
+        channel.id;
+      return 1;
+    });
+    await tauri.handle("pty_resize", (args) => {
+      const w = window as unknown as { __ptyResizeCalls?: unknown[] };
+      w.__ptyResizeCalls = w.__ptyResizeCalls ?? [];
+      w.__ptyResizeCalls.push(args);
+      return null;
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __outputChannelId?: number }).__outputChannelId ?? null))
+      .not.toBeNull();
+
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "before-gap ", 0);
+    await expect.poll(() => terminalRowsText(page)).toContain("before-gap");
+    await page.evaluate(() => {
+      (window as unknown as { __ptyResizeCalls?: unknown[] }).__ptyResizeCalls = [];
+    });
+    // Index 1 never arrives, as when Tauri's payload fetch fails.
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "after-gap", 2);
+    expect(await terminalRowsText(page)).not.toContain("after-gap");
+
+    await expect
+      .poll(() => terminalRowsText(page), { timeout: 5_000 })
+      .toContain("after-gap");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __ptyResizeCalls?: unknown[] })
+              .__ptyResizeCalls?.length ?? 0,
+        ),
+      )
+      .toBeGreaterThanOrEqual(1);
+  });
+
+  test("Refresh Terminal replaces a stalled output channel", async ({
+    page,
+    tauri,
+  }) => {
+    await seedWritableTerminal(tauri);
+    await tauri.handle("pty_subscribe_output", (args) => {
+      const { channel } = args as { channel: { id: number } };
+      const w = window as unknown as {
+        __outputChannelId?: number;
+        __outputChannelIds?: number[];
+      };
+      w.__outputChannelId = channel.id;
+      w.__outputChannelIds = [...(w.__outputChannelIds ?? []), channel.id];
+      return w.__outputChannelIds.length;
+    });
+    await tauri.handle("pty_resize", () => null);
+    await tauri.handle("pty_reset_dec_modes", () => undefined);
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __outputChannelId?: number }).__outputChannelId ?? null))
+      .not.toBeNull();
+
+    const subscriptionCount = () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __outputChannelIds?: number[] })
+            .__outputChannelIds?.length ?? 0,
+      );
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "stalled", 1);
+    const before = await subscriptionCount();
+    await page.locator('[data-tab-drag-handle="s-term"]').click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Refresh Terminal", exact: true }).click();
+
+    await expect.poll(subscriptionCount).toBe(before + 1);
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "after-refresh", 0);
+    await expect.poll(() => terminalRowsText(page)).toContain("after-refresh");
   });
 
   test("applies terminal font smoothing setting to the terminal renderer", async ({
