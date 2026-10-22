@@ -15,6 +15,7 @@ mod daemon_commands;
 mod daemon_stream;
 mod error;
 mod external_url;
+mod frontend_log;
 mod fs_explorer;
 mod git_ops;
 mod github_api;
@@ -948,6 +949,7 @@ pub fn run() {
             commands::restore_removed_session,
             commands::discard_removed_session,
             commands::scrollback_save,
+            frontend_log::frontend_log,
             commands::scrollback_load,
             commands::scrollback_delete,
             commands::scrollback_orphan_size,

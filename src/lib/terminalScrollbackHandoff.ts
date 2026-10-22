@@ -1,7 +1,23 @@
 import { prepareScrollbackForSave } from "./terminalScrollback";
 
 const snapshots = new Map<string, string>();
+const staleSessionIds = new Set<string>();
 let liveSessionIds: Set<string> | null = null;
+
+/**
+ * The saved screen predates a dead xterm: nothing was saved while it was
+ * frozen, and a TUI may have exited meanwhile. The next mount restores from
+ * the daemon instead of painting it.
+ */
+export function markTerminalSnapshotStale(sessionId: string): void {
+  snapshots.delete(sessionId);
+  staleSessionIds.add(sessionId);
+}
+
+/** One-shot, read by the next mount's restore. */
+export function consumeTerminalSnapshotStale(sessionId: string): boolean {
+  return staleSessionIds.delete(sessionId);
+}
 
 export function rememberTerminalScrollback(
   sessionId: string,

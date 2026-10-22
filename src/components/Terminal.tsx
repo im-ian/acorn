@@ -17,7 +17,11 @@ import { ArrowDownToLine } from "lucide-react";
 import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
 import { api, type ClipboardSnapshot } from "../lib/api";
-import { consumeTerminalDetaching } from "../lib/terminalDetach";
+import {
+  consumeTerminalDetaching,
+  markTerminalDetaching,
+} from "../lib/terminalDetach";
+import { logFrontendEvent } from "../lib/frontendLog";
 import {
   isParkedInTerminalLimbo,
   shouldFitTerminal,
@@ -64,6 +68,10 @@ import {
   type TerminalOutputWriter,
 } from "../lib/terminalOutputWriter";
 import {
+  createOutputStallDetector,
+  takeTerminalRecoveryBudget,
+} from "../lib/terminalOutputStall";
+import {
   createPtyOutputChannel,
   type PtyOutputChannel,
 } from "../lib/ptyOutputChannel";
@@ -96,12 +104,15 @@ import {
 } from "../lib/terminalScrollback";
 import {
   clearRememberedTerminalScrollback,
+  consumeTerminalSnapshotStale,
+  markTerminalSnapshotStale,
   rememberedTerminalScrollback,
   rememberTerminalScrollback,
 } from "../lib/terminalScrollbackHandoff";
 import {
   takeTerminalFocus,
   clearTerminalFocus,
+  rememberTerminalFocus,
   terminalFocusBlockedByTextEntry,
 } from "../lib/terminalFocus";
 import {
@@ -265,6 +276,21 @@ const COMPOSING_CLASS = "acorn-terminal-composing";
  *  the `::after` only — pulling the caret's layout box would also drag the
  *  cloned line tail, which is the TUI chrome after the cursor. */
 const CARET_CELL_GRID_INSET_PX = 1;
+
+/** How long to wait for queued output to parse before treating xterm as
+ *  dead. */
+const OUTPUT_DRAIN_TIMEOUT_MS = 2000;
+
+/** A dead xterm never calls back, so anything waiting on its writer needs a
+ *  bound. */
+function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  return Promise.race([
+    promise.then(() => true),
+    new Promise<boolean>((resolve) => {
+      window.setTimeout(() => resolve(false), ms);
+    }),
+  ]);
+}
 // xterm briefly leaves and re-enters hovered links when refreshed rows repaint.
 const LINK_TOOLTIP_HIDE_GRACE_MS = 80;
 
@@ -1016,6 +1042,9 @@ export function Terminal({
     linkKey: string;
   } | null>(null);
   const [isScrolledBack, setIsScrolledBack] = useState(false);
+  // Bumped to rebuild xterm, its writer and its output channel when the
+  // output pipeline dies. The PTY stays attached in the daemon.
+  const [mountGeneration, setMountGeneration] = useState(0);
   const fontSmoothing = useSettings(
     (s) => s.settings.terminal.fontSmoothing,
   );
@@ -4062,6 +4091,84 @@ export function Terminal({
       backgroundDelayMs: () => backgroundOutputDelayMsRef.current,
     });
     outputWriterRef.current = outputWriter;
+    // Set once this mount is being replaced because its output pipeline
+    // died. Cleanup must not wait on a writer xterm will never call back.
+    let replacingStalledMount = false;
+    const xtermWriteBufferState = () => {
+      const buffer = (
+        term as unknown as {
+          _core?: {
+            _writeBuffer?: {
+              _writeBuffer?: unknown[];
+              _bufferOffset?: number;
+              _pendingData?: number;
+            };
+          };
+        }
+      )._core?._writeBuffer;
+      return {
+        xtermQueued: buffer?._writeBuffer?.length ?? null,
+        xtermOffset: buffer?._bufferOffset ?? null,
+        xtermPendingBytes: buffer?._pendingData ?? null,
+      };
+    };
+    // Rebuild this terminal and re-attach, the same way an evicted
+    // off-screen terminal comes back. Nothing in place can revive an xterm
+    // whose parse loop died.
+    const remountStalledTerminal = async (reason: string) => {
+      if (disposed || replacingStalledMount) return;
+      const detail = {
+        sessionId,
+        reason,
+        writerQueuedBytes: outputWriter.pendingBytes(),
+        ...outputWriter.progress(),
+        ...xtermWriteBufferState(),
+      };
+      // Remounting detaches the PTY. Only a daemon session survives that;
+      // an in-process shell would be killed.
+      let daemonAlive = false;
+      try {
+        daemonAlive = (await api.daemonListSessions()).some(
+          (session) => session.id === sessionId && session.alive,
+        );
+      } catch {
+        // Unknown counts as not daemon-backed.
+      }
+      if (disposed || replacingStalledMount) return;
+      if (!daemonAlive) {
+        logFrontendEvent("terminal.recovery-skipped", {
+          ...detail,
+          why: "not-daemon",
+        });
+        return;
+      }
+      if (!takeTerminalRecoveryBudget(sessionId)) {
+        logFrontendEvent("terminal.recovery-skipped", {
+          ...detail,
+          why: "budget",
+        });
+        return;
+      }
+      replacingStalledMount = true;
+      logFrontendEvent("terminal.remount", detail);
+      // The new xterm opens unfocused. Keystrokes typed into the frozen view
+      // would otherwise be dropped until the user clicks.
+      if (container.contains(document.activeElement)) {
+        rememberTerminalFocus(sessionId);
+      }
+      markTerminalSnapshotStale(sessionId);
+      markTerminalDetaching(sessionId);
+      setMountGeneration((generation) => generation + 1);
+    };
+    const outputStall = createOutputStallDetector();
+    const outputStallTimer = window.setInterval(() => {
+      if (disposed || replacingStalledMount) return;
+      const stalled = outputStall.tick({
+        ...outputWriter.progress(),
+        visible: document.visibilityState === "visible",
+      });
+      if (stalled) void remountStalledTerminal("output-stalled");
+    }, 1000);
     // Reset the emulator in place and ask the foreground process to redraw.
     // A PTY exit with the restart prompt disabled removes a worktree-backed
     // session, so this path never kills or respawns the shell. The DEC
@@ -4079,12 +4186,28 @@ export function Terminal({
       }
       if (disposed) return;
       outputWriter.discardPending();
-      await outputWriter.whenIdle();
+      // A dead xterm never drains, and nothing below could paint on it.
+      // Rebuild the terminal instead.
+      const drained = await settlesWithin(
+        outputWriter.whenIdle(),
+        OUTPUT_DRAIN_TIMEOUT_MS,
+      );
       if (disposed) return;
+      if (!drained) {
+        await remountStalledTerminal("refresh-drain-timeout");
+        return;
+      }
       // Read after the drain: output parsed while resubscribing (a TUI
       // leaving the alt screen) must not be undone by the restore below.
       const redraw = terminalRefreshRedraw(term);
       const modes = snapshotTerminalRefreshModes(term);
+      logFrontendEvent("terminal.refresh", {
+        sessionId,
+        redraw,
+        ptyReady,
+        alternateScreen: modes.alternateScreen,
+        mouseTrackingMode: modes.mouseTrackingMode,
+      });
       hideLinkTooltip(true);
       term.reset();
       // `reset()` does not pass ESC c through the parser, so the cursor
@@ -4183,7 +4306,7 @@ export function Terminal({
           // The dropped bytes are gone; a TUI repaints the whole frame on
           // SIGWINCH, which covers whatever they would have drawn.
           onGap: () => {
-            console.warn("[Terminal] pty output chunk lost", sessionId);
+            logFrontendEvent("terminal.output-gap", { sessionId });
             if (!disposed && ptyReady) void pulseRemountedPty();
           },
         },
@@ -4387,11 +4510,14 @@ export function Terminal({
           sessionId,
         });
         if (disposed) return;
-        const handoff = rememberedTerminalScrollback(sessionId);
+        const snapshotStale = consumeTerminalSnapshotStale(sessionId);
+        const handoff = snapshotStale
+          ? null
+          : rememberedTerminalScrollback(sessionId);
         const restorePlan = planTerminalRestore({
           daemonAlive: daemonSessionAliveAtMount,
           handoff,
-          disk: saved,
+          disk: snapshotStale ? null : saved,
         });
         replayScrollbackOnSpawn = restorePlan.replayScrollback;
         preserveOverlayOnSpawn = false;
@@ -4584,7 +4710,17 @@ export function Terminal({
       repositionPending = false;
       try { fitAddon.dispose(); } catch { /* ignore */ }
       try { serializeAddon.dispose(); } catch { /* ignore */ }
-      term.dispose();
+      try {
+        term.dispose();
+      } catch (err) {
+        // A terminal whose parser died can fail mid-dispose. Its element must
+        // still leave the container, or the next mount opens beside it.
+        term.element?.remove();
+        logFrontendEvent("terminal.dispose-failed", {
+          sessionId,
+          message: String(err),
+        });
+      }
       termRef.current = null;
       fitRef.current = null;
       fitTerminalRef.current = null;
@@ -4606,11 +4742,15 @@ export function Terminal({
         window.clearTimeout(scrollbackSaveTimer);
         scrollbackSaveTimer = null;
       }
-      const drainAndPersistBeforeDispose = detachingForReuse;
+      // A stalled mount's writer never drains, and its buffer is the frozen
+      // frame. Dispose now; the remount repaints from the daemon.
+      const drainAndPersistBeforeDispose =
+        detachingForReuse && !replacingStalledMount;
       if (!drainAndPersistBeforeDispose) {
         outputWriter.dispose();
       }
       streamingViewportRepaint.dispose();
+      window.clearInterval(outputStallTimer);
       cancelLinkTooltipHide();
       if (resizeTimer !== null) {
         window.clearTimeout(resizeTimer);
@@ -4715,11 +4855,22 @@ export function Terminal({
         // resulting buffer before releasing the frontend terminal resources.
         void (async () => {
           try {
-            await outputWriter.drainAndDispose();
-            await persistScrollbackAsync({
-              force: true,
-              skipOutputDrain: true,
-            });
+            // A frozen terminal never drains. Bound the wait so it is still
+            // disposed, and keep its frozen frame from being restored.
+            if (
+              await settlesWithin(
+                outputWriter.drainAndDispose(),
+                OUTPUT_DRAIN_TIMEOUT_MS,
+              )
+            ) {
+              await persistScrollbackAsync({
+                force: true,
+                skipOutputDrain: true,
+              });
+            } else {
+              outputWriter.dispose();
+              markTerminalSnapshotStale(sessionId);
+            }
           } finally {
             disposeTerminalResources();
           }
@@ -4728,7 +4879,7 @@ export function Terminal({
         disposeTerminalResources();
       }
     };
-  }, [sessionId, repoPath, cwd]);
+  }, [sessionId, repoPath, cwd, mountGeneration]);
 
   useEffect(() => {
     const term = termRef.current;

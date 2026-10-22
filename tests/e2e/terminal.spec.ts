@@ -562,6 +562,98 @@ function terminalRowsText(page: Page): Promise<string> {
   );
 }
 
+// Drop xterm's next parse-loop tick, the state a throw inside that loop
+// leaves behind: the write buffer never drains and write callbacks never
+// fire. One-shot, so the remounted xterm parses normally.
+async function freezeNextXtermParse(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __xtermFrozen?: boolean };
+    const original = window.setTimeout;
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...rest: unknown[]) => {
+      if (
+        !w.__xtermFrozen &&
+        typeof handler === "function" &&
+        handler.toString().includes("_innerWrite")
+      ) {
+        w.__xtermFrozen = true;
+        window.setTimeout = original;
+        return 0;
+      }
+      return original(handler, timeout, ...rest);
+    }) as typeof window.setTimeout;
+  });
+}
+
+async function seedRecoverableTerminal(tauri: TauriMock): Promise<void> {
+  await seedWritableTerminal(tauri);
+  await tauri.respond("daemon_list_sessions", [
+    {
+      id: "s-term",
+      name: "shell",
+      kind: "regular",
+      alive: true,
+      cwd: "/tmp/demo",
+      repo_path: "/tmp/demo",
+      branch: "main",
+      agent_kind: null,
+    },
+  ]);
+  await tauri.handle("pty_subscribe_output", (args) => {
+    const { channel } = args as { channel: { id: number } };
+    const w = window as unknown as {
+      __outputChannelId?: number;
+      __outputChannelIds?: number[];
+    };
+    w.__outputChannelId = channel.id;
+    w.__outputChannelIds = [...(w.__outputChannelIds ?? []), channel.id];
+    return w.__outputChannelIds.length;
+  });
+  await tauri.handle("pty_resize", () => null);
+  await tauri.handle("pty_detach", () => true);
+  await tauri.handle("pty_kill", (args) => {
+    const w = window as unknown as { __ptyKills?: unknown[] };
+    w.__ptyKills = [...(w.__ptyKills ?? []), args];
+    return null;
+  });
+  await tauri.handle("scrollback_save", (args) => {
+    const w = window as unknown as { __savedScreens?: string[] };
+    const { data } = args as { data: string };
+    w.__savedScreens = [...(w.__savedScreens ?? []), data];
+    return null;
+  });
+  await tauri.handle("frontend_log", (args) => {
+    const w = window as unknown as { __frontendLog?: unknown[] };
+    const { entry } = args as { entry: string };
+    w.__frontendLog = [...(w.__frontendLog ?? []), JSON.parse(entry)];
+    return null;
+  });
+}
+
+function outputChannelId(page: Page): Promise<number | null> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __outputChannelId?: number }).__outputChannelId ??
+      null,
+  );
+}
+
+function outputSubscriptionCount(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __outputChannelIds?: number[] })
+        .__outputChannelIds?.length ?? 0,
+  );
+}
+
+async function remountReasons(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    ((window as unknown as { __frontendLog?: { event: string; reason?: string }[] })
+      .__frontendLog ?? [])
+      .filter((entry) => entry.event === "terminal.remount")
+      .map((entry) => entry.reason ?? ""),
+  );
+}
+
 async function gotoWithAccent(page: Page): Promise<void> {
   await page.goto("/");
   await page.addStyleTag({
@@ -1474,6 +1566,94 @@ test.describe("terminal: spawn", () => {
     await expect.poll(subscriptionCount).toBe(before + 1);
     await emitSubscribedPtyOutput(page, "__outputChannelId", "after-refresh", 0);
     await expect.poll(() => terminalRowsText(page)).toContain("after-refresh");
+  });
+
+  test("rebuilds a terminal whose xterm stopped parsing", async ({
+    page,
+    tauri,
+  }) => {
+    await seedRecoverableTerminal(tauri);
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect.poll(() => outputChannelId(page)).not.toBeNull();
+    // An alt-screen TUI frame, saved to the handoff snapshot.
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "\x1b[?1049h\x1b[HSTALE-ALT-FRAME", 0);
+    await expect.poll(() => terminalRowsText(page)).toContain("STALE-ALT-FRAME");
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __savedScreens?: string[] }).__savedScreens ?? []), { timeout: 5_000 })
+      .toContainEqual(expect.stringContaining("STALE-ALT-FRAME"));
+    await page.locator('[data-acorn-terminal-slot="s-term"] .xterm-helper-textarea').focus();
+    const before = await outputSubscriptionCount(page);
+
+    await freezeNextXtermParse(page);
+    // The TUI exits while the view is frozen.
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "\x1b[?1049llost-in-frozen-xterm", 1);
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __xtermFrozen?: boolean }).__xtermFrozen ?? false))
+      .toBe(true);
+    await page.waitForTimeout(500);
+    expect(await terminalRowsText(page)).not.toContain("lost-in-frozen-xterm");
+
+    await expect
+      .poll(() => outputSubscriptionCount(page), { timeout: 15_000 })
+      .toBe(before + 1);
+    expect(await remountReasons(page)).toEqual(["output-stalled"]);
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "after-recovery", 0);
+    await expect.poll(() => terminalRowsText(page)).toContain("after-recovery");
+    // The frozen frame is not painted back, and only the new xterm remains.
+    expect(await terminalRowsText(page)).not.toContain("STALE-ALT-FRAME");
+    await expect(page.locator('[data-acorn-terminal-slot="s-term"] .xterm')).toHaveCount(1);
+    // The keyboard follows the rebuilt terminal.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            document.activeElement?.classList.contains("xterm-helper-textarea") ??
+            false,
+        ),
+      )
+      .toBe(true);
+    await page.keyboard.type("ls");
+    await expect
+      .poll(() => page.evaluate(() => ((window as unknown as { __ptyWrites?: string[] }).__ptyWrites ?? []).join("")))
+      .toContain("ls");
+    // A scheduled kill would fire 250ms after cleanup.
+    await page.waitForTimeout(400);
+    expect(
+      await page.evaluate(() => (window as unknown as { __ptyKills?: unknown[] }).__ptyKills ?? []),
+    ).toEqual([]);
+  });
+
+  test("Refresh Terminal rebuilds a terminal whose xterm stopped parsing", async ({
+    page,
+    tauri,
+  }) => {
+    await seedRecoverableTerminal(tauri);
+    await tauri.handle("pty_reset_dec_modes", () => undefined);
+    await page.goto("/");
+    await page.getByRole("button", { name: /^shell main · Ready$/ }).click();
+    await expect.poll(() => outputChannelId(page)).not.toBeNull();
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "before-freeze ", 0);
+    await expect.poll(() => terminalRowsText(page)).toContain("before-freeze");
+    const before = await outputSubscriptionCount(page);
+
+    await freezeNextXtermParse(page);
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "lost-in-frozen-xterm", 1);
+    await page.locator('[data-tab-drag-handle="s-term"]').click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Refresh Terminal", exact: true }).click();
+
+    // Refresh resubscribes, then the rebuilt mount subscribes again.
+    await expect
+      .poll(() => outputSubscriptionCount(page), { timeout: 5_000 })
+      .toBe(before + 2);
+    expect(await remountReasons(page)).toEqual(["refresh-drain-timeout"]);
+    await emitSubscribedPtyOutput(page, "__outputChannelId", "after-refresh-remount", 0);
+    await expect.poll(() => terminalRowsText(page)).toContain("after-refresh-remount");
+    await expect(page.locator('[data-acorn-terminal-slot="s-term"] .xterm')).toHaveCount(1);
+    await page.waitForTimeout(400);
+    expect(
+      await page.evaluate(() => (window as unknown as { __ptyKills?: unknown[] }).__ptyKills ?? []),
+    ).toEqual([]);
   });
 
   test("applies terminal font smoothing setting to the terminal renderer", async ({
