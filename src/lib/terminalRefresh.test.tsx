@@ -24,6 +24,7 @@ const shellModes: TerminalRefreshModes = {
   bracketedPasteMode: true,
   mouseTrackingMode: "none",
   mouseEncoding: "DEFAULT",
+  cursorHidden: false,
 };
 
 describe("terminalRefreshRedraw", () => {
@@ -62,9 +63,10 @@ describe("terminalRefreshRestoreSequence", () => {
         bracketedPasteMode: true,
         mouseTrackingMode: "any",
         mouseEncoding: "SGR",
+        cursorHidden: true,
       }),
     ).toBe(
-      "\x1b[?1049h\x1b[?1h\x1b[?66h\x1b[?2004h\x1b[?1003h\x1b[?1006h",
+      "\x1b[?1049h\x1b[?1h\x1b[?66h\x1b[?2004h\x1b[?1003h\x1b[?1006h\x1b[?25l",
     );
   });
 

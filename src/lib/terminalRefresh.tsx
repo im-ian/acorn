@@ -19,6 +19,7 @@ export interface TerminalRefreshModes {
   bracketedPasteMode: boolean;
   mouseTrackingMode: string;
   mouseEncoding: TerminalRefreshMouseEncoding | null;
+  cursorHidden: boolean;
 }
 
 export function terminalRefreshRedraw(term: {
@@ -64,6 +65,7 @@ export function terminalRefreshRestoreSequence(
     if (modes.mouseEncoding === "SGR") out += "\x1b[?1006h";
     if (modes.mouseEncoding === "SGR_PIXELS") out += "\x1b[?1016h";
   }
+  if (modes.cursorHidden) out += "\x1b[?25l";
   return out;
 }
 
