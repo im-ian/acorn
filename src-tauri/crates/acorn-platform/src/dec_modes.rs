@@ -4,7 +4,8 @@
 //! at start, then never repeat those sequences. A fresh xterm that stays on
 //! the normal buffer hides the SIGWINCH redraw, so keystrokes land in the
 //! child and nothing paints. The prelude is the subset we restore: alt
-//! screen, mouse protocol, SGR encoding, and bracketed paste. `?1049h` is
+//! screen, mouse protocol, SGR encoding, bracketed paste, and a hidden
+//! cursor (a fresh xterm shows it at the TUI's last write). `?1049h` is
 //! sent only as that prelude — dumping it out of the ring clears xterm.js's
 //! alt buffer under the bytes that follow.
 
@@ -26,6 +27,7 @@ pub struct DecPrivateModes {
     pub mouse: MouseProtocol,
     pub sgr_mouse: bool,
     pub bracketed_paste: bool,
+    pub cursor_hidden: bool,
 }
 
 impl DecPrivateModes {
@@ -49,6 +51,9 @@ impl DecPrivateModes {
         }
         if self.bracketed_paste {
             out.extend_from_slice(b"\x1b[?2004h");
+        }
+        if self.cursor_hidden {
+            out.extend_from_slice(b"\x1b[?25l");
         }
         out
     }
@@ -211,6 +216,8 @@ impl DecModeTracker {
     fn apply_csi(&mut self, final_byte: u8) {
         self.csi.finish_param();
         if self.csi.intermediates == b'!' && final_byte == b'p' {
+            // DECSTR shows the cursor in xterm.js; other DEC modes stay.
+            self.modes.cursor_hidden = false;
             return;
         }
         if self.csi.private != b'?' || self.csi.intermediates != 0 {
@@ -244,6 +251,7 @@ impl DecModeTracker {
             }
             1006 => self.modes.sgr_mouse = enable,
             2004 => self.modes.bracketed_paste = enable,
+            25 => self.modes.cursor_hidden = !enable,
             _ => {}
         }
     }
@@ -263,7 +271,7 @@ mod tests {
 
     #[test]
     fn grok_startup_mouse_sgr() {
-        let modes = track(&[b"\x1b[?1049h\x1b[?1000h\x1b[?1006hhello"]);
+        let modes = track(&[b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006hhello"]);
         assert_eq!(
             modes,
             DecPrivateModes {
@@ -271,12 +279,16 @@ mod tests {
                 mouse: MouseProtocol::Vt200,
                 sgr_mouse: true,
                 bracketed_paste: false,
+                cursor_hidden: true,
             }
         );
-        assert_eq!(modes.prelude(), b"\x1b[?1049h\x1b[?1000h\x1b[?1006h");
+        assert_eq!(
+            modes.prelude(),
+            b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?25l"
+        );
         assert_eq!(
             without_alt_screen_enter(&modes.prelude()),
-            b"\x1b[?1000h\x1b[?1006h"
+            b"\x1b[?1000h\x1b[?1006h\x1b[?25l"
         );
     }
 
@@ -327,6 +339,14 @@ mod tests {
         assert!(modes.bracketed_paste);
         let modes = track(&[b"\x1b[?1000h\x1b[?1006h\x1bc"]);
         assert_eq!(modes, DecPrivateModes::default());
+    }
+
+    #[test]
+    fn cursor_shown_by_dectcem_decstr_or_ris() {
+        assert!(track(&[b"\x1b[?25l"]).cursor_hidden);
+        assert!(!track(&[b"\x1b[?25l\x1b[?25h"]).cursor_hidden);
+        assert!(!track(&[b"\x1b[?25l\x1b[!p"]).cursor_hidden);
+        assert!(!track(&[b"\x1b[?25l\x1bc"]).cursor_hidden);
     }
 
     #[test]

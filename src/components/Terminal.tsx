@@ -937,6 +937,16 @@ function readMouseEncoding(term: XTerm): TerminalRefreshMouseEncoding | null {
   return null;
 }
 
+function readCursorHidden(term: XTerm): boolean {
+  return (
+    (
+      term as unknown as {
+        _core?: { coreService?: { isCursorHidden?: boolean } };
+      }
+    )._core?.coreService?.isCursorHidden === true
+  );
+}
+
 function snapshotTerminalRefreshModes(term: XTerm): TerminalRefreshModes {
   return {
     alternateScreen: term.buffer.active.type === "alternate",
@@ -945,6 +955,7 @@ function snapshotTerminalRefreshModes(term: XTerm): TerminalRefreshModes {
     bracketedPasteMode: term.modes.bracketedPasteMode,
     mouseTrackingMode: term.modes.mouseTrackingMode,
     mouseEncoding: readMouseEncoding(term),
+    cursorHidden: readCursorHidden(term),
   };
 }
 
