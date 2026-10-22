@@ -69,8 +69,12 @@ export function createOrderedChannelReceiver(
       // `end` only marks the Rust side dropping the channel; disposal is
       // owned by the subscriber.
       if (disposed || raw.end || raw.index < next) return;
+      const head = next;
       pending.set(raw.index, raw.message);
       drain();
+      // The clock belongs to the index at the head. A chunk that was only
+      // late must not inherit the wait of the one before it.
+      if (next !== head) clearGapTimer();
       if (pending.size === 0) clearGapTimer();
       else armGapTimer();
     },

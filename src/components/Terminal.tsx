@@ -4058,8 +4058,6 @@ export function Terminal({
     // overlay ring instead of waiting for SIGWINCH.
     let refreshInFlight = false;
     const refreshMountedTerminal = async () => {
-      const redraw = terminalRefreshRedraw(term);
-      const modes = snapshotTerminalRefreshModes(term);
       // A chunk lost on the current channel holds back every later one, so
       // nothing below would ever paint. Swapping first also lands the redraw
       // on the new channel.
@@ -4072,6 +4070,10 @@ export function Terminal({
       outputWriter.discardPending();
       await outputWriter.whenIdle();
       if (disposed) return;
+      // Read after the drain: output parsed while resubscribing (a TUI
+      // leaving the alt screen) must not be undone by the restore below.
+      const redraw = terminalRefreshRedraw(term);
+      const modes = snapshotTerminalRefreshModes(term);
       hideLinkTooltip(true);
       term.reset();
       // `reset()` does not pass ESC c through the parser, so the cursor

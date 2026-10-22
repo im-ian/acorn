@@ -50,6 +50,28 @@ describe("createOrderedChannelReceiver", () => {
     expect(seen).toEqual(["a", "c", "d", "e"]);
   });
 
+  it("times each missing index from when it became the head", () => {
+    const seen: unknown[] = [];
+    const onGap = vi.fn();
+    const receiver = createOrderedChannelReceiver((m) => seen.push(m), {
+      onGap,
+      gapTimeoutMs: 2000,
+    });
+
+    receiver.receive({ index: 0, message: 0 });
+    receiver.receive({ index: 2, message: 2 });
+    vi.advanceTimersByTime(100);
+    receiver.receive({ index: 4, message: 4 });
+    vi.advanceTimersByTime(1400);
+    receiver.receive({ index: 1, message: 1 });
+    // Index 3 has been missing for 500ms, not 2s.
+    vi.advanceTimersByTime(500);
+    receiver.receive({ index: 3, message: 3 });
+
+    expect(seen).toEqual([0, 1, 2, 3, 4]);
+    expect(onGap).not.toHaveBeenCalled();
+  });
+
   it("does not deliver after dispose", () => {
     const seen: unknown[] = [];
     const receiver = createOrderedChannelReceiver((m) => seen.push(m), {
