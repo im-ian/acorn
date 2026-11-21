@@ -25,4 +25,4 @@ tracing = { workspace = true }
 fs2 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", default-features = false, features = ["process", "signal"] }
+nix = { version = "0.32", default-features = false, features = ["process", "signal"] }
