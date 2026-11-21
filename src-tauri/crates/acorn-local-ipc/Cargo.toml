@@ -11,7 +11,7 @@ name = "acorn_local_ipc"
 interprocess = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nix = { version = "0.31", default-features = false, features = ["socket"] }
+nix = { version = "0.32", default-features = false, features = ["socket"] }
 
 [target.'cfg(windows)'.dependencies]
 widestring = { workspace = true }

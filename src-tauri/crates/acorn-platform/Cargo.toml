@@ -13,7 +13,7 @@ tempfile = { workspace = true }
 sysinfo = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", default-features = false, features = ["process", "signal"] }
+nix = { version = "0.32", default-features = false, features = ["process", "signal"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
